@@ -121,9 +121,28 @@
 </div>
 <footer>GHW Valuations — internal tool</footer>
 
+<div class="note" id="loadError" style="display:none; background:#fdecea; border:1px solid #f5c2c0; padding:12px; border-radius:4px; color:#9a2f2a;"></div>
+
+<script>
+// Plain script (not a module) so the upload UI always works, even if the
+// AI/library imports below fail to load for any reason.
+document.getElementById('drop').addEventListener('click', () => {
+  document.getElementById('fileInput').click();
+});
+</script>
+
 <script type="module">
-import { removeBackground } from 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/dist/browser.mjs';
-import JSZip from 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm';
+let removeBackground, JSZip;
+const loadErrorEl = document.getElementById('loadError');
+
+try {
+  ({ removeBackground } = await import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/dist/browser.mjs'));
+  ({ default: JSZip } = await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm'));
+} catch (err) {
+  loadErrorEl.style.display = 'block';
+  loadErrorEl.textContent = 'Could not load required libraries (background removal / ZIP). This usually means the page is being opened as a local file rather than a real web address, or there is no internet connection. Try opening the hosted GitHub Pages link instead. Technical detail: ' + err.message;
+  console.error(err);
+}
 
 const CANVAS_SIZE = 1600;
 const PADDING_PCT = 0.06; // 6% padding around item after crop
@@ -139,8 +158,13 @@ const progressInner = document.getElementById('progressInner');
 
 let files = [];
 let results = []; // { name, blob }
+let activeObjectUrls = [];
 
-drop.addEventListener('click', () => fileInput.click());
+function revokeActiveObjectUrls() {
+  activeObjectUrls.forEach(url => URL.revokeObjectURL(url));
+  activeObjectUrls = [];
+}
+
 drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('dragover'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
 drop.addEventListener('drop', e => {
@@ -151,6 +175,7 @@ drop.addEventListener('drop', e => {
 fileInput.addEventListener('change', e => handleFiles(e.target.files));
 
 function handleFiles(fileList) {
+  revokeActiveObjectUrls();
   files = Array.from(fileList).filter(f => f.type.startsWith('image/')).slice(0, 200);
   grid.innerHTML = '';
   results = [];
@@ -168,6 +193,10 @@ function handleFiles(fileList) {
 }
 
 processBtn.addEventListener('click', async () => {
+  if (!removeBackground || !JSZip) {
+    status.textContent = 'Cannot process — required libraries failed to load. See error message above.';
+    return;
+  }
   processBtn.disabled = true;
   downloadBtn.disabled = true;
   results = [];
@@ -183,6 +212,7 @@ processBtn.addEventListener('click', async () => {
     try {
       const outBlob = await processImage(file);
       const url = URL.createObjectURL(outBlob);
+      activeObjectUrls.push(url);
       thumbEl.innerHTML = `<img src="${url}"><div class="label">${file.name}</div>`;
       results.push({ name: baseName(file.name) + '.png', blob: outBlob });
     } catch (err) {
@@ -283,7 +313,6 @@ function mildEnhance(ctx, w, h) {
     if (lum < min) min = lum;
     if (lum > max) max = lum;
   }
-  const range = Math.max(1, max - min);
   // Conservative stretch: only pull in 30% of the way toward full stretch, to avoid distorting colour/condition
   const strength = 0.3;
   const newMin = min - (min - 0) * strength;
@@ -318,6 +347,7 @@ downloadBtn.addEventListener('click', async () => {
   document.body.appendChild(a);
   a.click();
   a.remove();
+  URL.revokeObjectURL(url);
   status.textContent = `ZIP downloaded — ${results.length} images.`;
   downloadBtn.disabled = false;
 });
