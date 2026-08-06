@@ -136,7 +136,7 @@ let removeBackground, JSZip;
 const loadErrorEl = document.getElementById('loadError');
 
 try {
-  ({ removeBackground } = await import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/dist/browser.mjs'));
+  ({ removeBackground } = await import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/dist/index.mjs'));
   ({ default: JSZip } = await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm'));
 } catch (err) {
   loadErrorEl.style.display = 'block';
@@ -231,7 +231,9 @@ processBtn.addEventListener('click', async () => {
 
 async function processImage(file) {
   // 1. Remove background -> transparent PNG blob
-  const cutoutBlob = await removeBackground(file);
+  const cutoutBlob = await removeBackground(file, {
+    publicPath: 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/dist/'
+  });
   const cutoutBitmap = await createImageBitmap(cutoutBlob);
 
   // 2. Find bounding box of non-transparent pixels
