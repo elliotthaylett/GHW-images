@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GHW Batch Image Processor</title>
+<style>
+  :root {
+    --white: #ffffff;
+    --ink: #1a1a1a;
+    --muted: #6b6b6b;
+    --line: #e2e2e2;
+    --accent: #8a7355;
+    --accent-dark: #6b5940;
+    --bg: #faf9f7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Georgia', 'Times New Roman', serif;
+    background: var(--bg);
+    color: var(--ink);
+    padding: 40px 20px;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 1.7rem; font-weight: normal; margin-bottom: 4px; }
+  .sub { color: var(--muted); margin-bottom: 30px; font-size: 0.95rem; }
+  .panel {
+    background: var(--white);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .drop {
+    border: 2px dashed var(--line);
+    border-radius: 6px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .drop.dragover { border-color: var(--accent); background: #f5f1ea; }
+  .drop p { margin: 6px 0; color: var(--muted); }
+  .drop .big { color: var(--ink); font-size: 1.05rem; }
+  input[type=file] { display: none; }
+  button {
+    font-family: inherit;
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 12px 22px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.95rem;
+    transition: background 0.2s;
+  }
+  button:hover:not(:disabled) { background: var(--accent-dark); }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  .controls { display: flex; gap: 12px; margin-top: 16px; align-items: center; flex-wrap: wrap; }
+  .status { color: var(--muted); font-size: 0.9rem; }
+  .progress-outer {
+    width: 100%; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin-top: 14px;
+    display: none;
+  }
+  .progress-inner { height: 100%; width: 0%; background: var(--accent); transition: width 0.2s; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 10px;
+    margin-top: 20px;
+  }
+  .thumb {
+    position: relative;
+    aspect-ratio: 1;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    overflow: hidden;
+    background: #f0f0f0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .thumb img { width: 100%; height: 100%; object-fit: contain; background: white; }
+  .thumb .spinner {
+    width: 22px; height: 22px; border: 3px solid #ddd; border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  .thumb .fail { color: #b33; font-size: 0.7rem; text-align: center; padding: 4px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .thumb .label {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: rgba(0,0,0,0.55); color: white; font-size: 0.65rem;
+    padding: 2px 4px; text-align: center; font-family: sans-serif;
+  }
+  footer { text-align: center; color: var(--muted); font-size: 0.8rem; margin-top: 30px; }
+  .note { font-size: 0.85rem; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GHW Batch Image Processor</h1>
+  <div class="sub">Removes background, centres item on white, resizes to 1600×1600, applies mild enhancement — fully in your browser, nothing uploaded anywhere.</div>
+
+  <div class="panel">
+    <div class="drop" id="drop">
+      <p class="big">Click to choose images, or drag &amp; drop here</p>
+      <p>Up to 200 images at once · JPG / PNG</p>
+      <input type="file" id="fileInput" multiple accept="image/*">
+    </div>
+    <div class="controls">
+      <button id="processBtn" disabled>Process Images</button>
+      <button id="downloadBtn" disabled>Download ZIP</button>
+      <span class="status" id="status"></span>
+    </div>
+    <div class="progress-outer" id="progressOuter">
+      <div class="progress-inner" id="progressInner"></div>
+    </div>
+    <div class="note">First run downloads a small AI model (a few MB) to do background removal — this is cached after, so later runs are faster. Processing happens entirely on this device; nothing is sent to a server.</div>
+  </div>
+
+  <div class="grid" id="grid"></div>
+</div>
+<footer>GHW Valuations — internal tool</footer>
+
+<script type="module">
+import { removeBackground } from 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/dist/browser.mjs';
+import JSZip from 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm';
+
+const CANVAS_SIZE = 1600;
+const PADDING_PCT = 0.06; // 6% padding around item after crop
+
+const fileInput = document.getElementById('fileInput');
+const drop = document.getElementById('drop');
+const processBtn = document.getElementById('processBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+const status = document.getElementById('status');
+const grid = document.getElementById('grid');
+const progressOuter = document.getElementById('progressOuter');
+const progressInner = document.getElementById('progressInner');
+
+let files = [];
+let results = []; // { name, blob }
+
+drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('dragover'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
+drop.addEventListener('drop', e => {
+  e.preventDefault();
+  drop.classList.remove('dragover');
+  handleFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', e => handleFiles(e.target.files));
+
+function handleFiles(fileList) {
+  files = Array.from(fileList).filter(f => f.type.startsWith('image/')).slice(0, 200);
+  grid.innerHTML = '';
+  results = [];
+  downloadBtn.disabled = true;
+  status.textContent = `${files.length} image${files.length === 1 ? '' : 's'} selected`;
+  processBtn.disabled = files.length === 0;
+
+  files.forEach((f, i) => {
+    const thumb = document.createElement('div');
+    thumb.className = 'thumb';
+    thumb.id = `thumb-${i}`;
+    thumb.innerHTML = `<div class="spinner" style="display:none"></div><div class="label">${f.name}</div>`;
+    grid.appendChild(thumb);
+  });
+}
+
+processBtn.addEventListener('click', async () => {
+  processBtn.disabled = true;
+  downloadBtn.disabled = true;
+  results = [];
+  progressOuter.style.display = 'block';
+  let done = 0;
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const thumbEl = document.getElementById(`thumb-${i}`);
+    thumbEl.querySelector('.spinner').style.display = 'block';
+    status.textContent = `Processing ${i + 1} of ${files.length}: ${file.name}`;
+
+    try {
+      const outBlob = await processImage(file);
+      const url = URL.createObjectURL(outBlob);
+      thumbEl.innerHTML = `<img src="${url}"><div class="label">${file.name}</div>`;
+      results.push({ name: baseName(file.name) + '.png', blob: outBlob });
+    } catch (err) {
+      console.error('Failed on', file.name, err);
+      thumbEl.innerHTML = `<div class="fail">Failed:<br>${file.name}</div><div class="label">${file.name}</div>`;
+    }
+
+    done++;
+    progressInner.style.width = `${Math.round((done / files.length) * 100)}%`;
+  }
+
+  status.textContent = `Done — ${results.length} of ${files.length} processed successfully.`;
+  processBtn.disabled = false;
+  downloadBtn.disabled = results.length === 0;
+});
+
+async function processImage(file) {
+  // 1. Remove background -> transparent PNG blob
+  const cutoutBlob = await removeBackground(file);
+  const cutoutBitmap = await createImageBitmap(cutoutBlob);
+
+  // 2. Find bounding box of non-transparent pixels
+  const tmpCanvas = document.createElement('canvas');
+  tmpCanvas.width = cutoutBitmap.width;
+  tmpCanvas.height = cutoutBitmap.height;
+  const tmpCtx = tmpCanvas.getContext('2d');
+  tmpCtx.drawImage(cutoutBitmap, 0, 0);
+  const imgData = tmpCtx.getImageData(0, 0, tmpCanvas.width, tmpCanvas.height);
+  const bbox = getAlphaBoundingBox(imgData);
+
+  // 3. Crop to bounding box (with small padding) into its own canvas
+  const padX = bbox.w * PADDING_PCT;
+  const padY = bbox.h * PADDING_PCT;
+  const cropX = Math.max(0, bbox.x - padX);
+  const cropY = Math.max(0, bbox.y - padY);
+  const cropW = Math.min(tmpCanvas.width - cropX, bbox.w + padX * 2);
+  const cropH = Math.min(tmpCanvas.height - cropY, bbox.h + padY * 2);
+
+  const cropCanvas = document.createElement('canvas');
+  cropCanvas.width = cropW;
+  cropCanvas.height = cropH;
+  const cropCtx = cropCanvas.getContext('2d');
+  cropCtx.drawImage(tmpCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+  // 4. Mild enhance (auto levels on the item, ignoring transparent pixels)
+  mildEnhance(cropCtx, cropW, cropH);
+
+  // 5. Composite onto final white 1600x1600 canvas, centred, scaled to fit
+  const finalCanvas = document.createElement('canvas');
+  finalCanvas.width = CANVAS_SIZE;
+  finalCanvas.height = CANVAS_SIZE;
+  const finalCtx = finalCanvas.getContext('2d');
+  finalCtx.fillStyle = '#ffffff';
+  finalCtx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+  const scale = Math.min(CANVAS_SIZE / cropW, CANVAS_SIZE / cropH) * 0.92; // 0.92 leaves a little breathing room
+  const drawW = cropW * scale;
+  const drawH = cropH * scale;
+  const offsetX = (CANVAS_SIZE - drawW) / 2;
+  const offsetY = (CANVAS_SIZE - drawH) / 2;
+  finalCtx.imageSmoothingQuality = 'high';
+  finalCtx.drawImage(cropCanvas, 0, 0, cropW, cropH, offsetX, offsetY, drawW, drawH);
+
+  return new Promise(resolve => finalCanvas.toBlob(resolve, 'image/png'));
+}
+
+function getAlphaBoundingBox(imgData) {
+  const { data, width, height } = imgData;
+  let minX = width, minY = height, maxX = 0, maxY = 0;
+  const ALPHA_THRESHOLD = 10;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const a = data[(y * width + x) * 4 + 3];
+      if (a > ALPHA_THRESHOLD) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < minX || maxY < minY) {
+    // nothing detected, fall back to full image
+    return { x: 0, y: 0, w: width, h: height };
+  }
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+function mildEnhance(ctx, w, h) {
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const data = imgData.data;
+
+  // Auto white balance + gentle contrast stretch, based only on opaque pixels
+  let min = 255, max = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 10) continue; // skip transparent
+    const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    if (lum < min) min = lum;
+    if (lum > max) max = lum;
+  }
+  const range = Math.max(1, max - min);
+  // Conservative stretch: only pull in 30% of the way toward full stretch, to avoid distorting colour/condition
+  const strength = 0.3;
+  const newMin = min - (min - 0) * strength;
+  const newMax = max + (255 - max) * strength;
+  const newRange = Math.max(1, newMax - newMin);
+
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 10) continue;
+    for (let c = 0; c < 3; c++) {
+      let v = data[i + c];
+      v = ((v - newMin) / newRange) * 255;
+      data[i + c] = Math.max(0, Math.min(255, v));
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+
+function baseName(filename) {
+  return filename.replace(/\.[^/.]+$/, '');
+}
+
+downloadBtn.addEventListener('click', async () => {
+  downloadBtn.disabled = true;
+  status.textContent = 'Building ZIP...';
+  const zip = new JSZip();
+  results.forEach(r => zip.file(r.name, r.blob));
+  const content = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(content);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `ghw-processed-images-${new Date().toISOString().slice(0,10)}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  status.textContent = `ZIP downloaded — ${results.length} images.`;
+  downloadBtn.disabled = false;
+});
+</script>
+</body>
+</html>
