@@ -136,8 +136,8 @@ let removeBackground, JSZip;
 const loadErrorEl = document.getElementById('loadError');
 
 try {
-  ({ removeBackground } = await import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/dist/index.mjs'));
-  ({ default: JSZip } = await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm'));
+  ({ removeBackground } = await import('https://esm.sh/@imgly/background-removal@1.5.5'));
+  ({ default: JSZip } = await import('https://esm.sh/jszip@3.10.1'));
 } catch (err) {
   loadErrorEl.style.display = 'block';
   loadErrorEl.textContent = 'Could not load required libraries (background removal / ZIP). This usually means the page is being opened as a local file rather than a real web address, or there is no internet connection. Try opening the hosted GitHub Pages link instead. Technical detail: ' + err.message;
@@ -231,9 +231,7 @@ processBtn.addEventListener('click', async () => {
 
 async function processImage(file) {
   // 1. Remove background -> transparent PNG blob
-  const cutoutBlob = await removeBackground(file, {
-    publicPath: 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/dist/'
-  });
+  const cutoutBlob = await removeBackground(file);
   const cutoutBitmap = await createImageBitmap(cutoutBlob);
 
   // 2. Find bounding box of non-transparent pixels
